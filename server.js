@@ -7,6 +7,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static("public"));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
@@ -18,7 +19,10 @@ if (!BOT_TOKEN) {
 }
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
+// in-memory store
 const sessions = {};
+const telegramToSessionMap = {};
 
 app.get("/", (req, res) => {
   res.send("Server running");
@@ -65,9 +69,39 @@ app.post("/debug/send-test", async (req, res) => {
   }
 });
 
+// create session
+app.post("/chat/start", (req, res) => {
+  try {
+    const { sessionId, name, phone } = req.body;
+
+    if (!sessionId || !name || !phone) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing sessionId, name or phone"
+      });
+    }
+
+    if (!sessions[sessionId]) {
+      sessions[sessionId] = {
+        name,
+        phone,
+        messages: []
+      };
+    } else {
+      sessions[sessionId].name = name;
+      sessions[sessionId].phone = phone;
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// send customer message
 app.post("/chat/send", async (req, res) => {
   try {
-    const { sessionId, text } = req.body;
+    const { sessionId, text, name, phone } = req.body;
 
     if (!sessionId || !text) {
       return res.status(400).json({
@@ -77,8 +111,22 @@ app.post("/chat/send", async (req, res) => {
     }
 
     if (!sessions[sessionId]) {
-      sessions[sessionId] = { messages: [] };
+      if (!name || !phone) {
+        return res.status(400).json({
+          ok: false,
+          error: "Missing customer info"
+        });
+      }
+
+      sessions[sessionId] = {
+        name,
+        phone,
+        messages: []
+      };
     }
+
+    if (name) sessions[sessionId].name = name;
+    if (phone) sessions[sessionId].phone = phone;
 
     sessions[sessionId].messages.push({
       from: "customer",
@@ -86,16 +134,26 @@ app.post("/chat/send", async (req, res) => {
     });
 
     if (ADMIN_CHAT_ID) {
-      await fetch(`${TELEGRAM_API}/sendMessage`, {
+      const tgRes = await fetch(`${TELEGRAM_API}/sendMessage`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
           chat_id: ADMIN_CHAT_ID,
-          text: `💬 New message\nSession: ${sessionId}\n\n${text}\n\nReply:\n/reply ${sessionId} your message`
+          text:
+            `💬 ${sessions[sessionId].name || "Customer"}\n` +
+            `📞 ${sessions[sessionId].phone || "-"}\n` +
+            `🆔 ${sessionId}\n\n` +
+            `${text}`
         })
       });
+
+      const data = await tgRes.json();
+
+      if (data.ok && data.result && data.result.message_id) {
+        telegramToSessionMap[data.result.message_id] = sessionId;
+      }
     }
 
     res.json({ ok: true });
@@ -104,37 +162,59 @@ app.post("/chat/send", async (req, res) => {
   }
 });
 
+// get messages for one user only
 app.get("/chat/messages", (req, res) => {
   const { sessionId } = req.query;
+
+  if (!sessionId) {
+    return res.status(400).json({
+      ok: false,
+      error: "Missing sessionId"
+    });
+  }
+
   const messages = sessions[sessionId]?.messages || [];
   res.json({ ok: true, messages });
 });
 
+// telegram webhook
 app.post(`/telegram/webhook/${WEBHOOK_SECRET}`, (req, res) => {
   try {
     const message = req.body.message;
 
-    if (message && message.text) {
-      const text = message.text;
-
-      if (text.startsWith("/reply ")) {
-        const parts = text.split(" ");
-        const sessionId = parts[1];
-        const replyText = parts.slice(2).join(" ");
-
-        if (!sessions[sessionId]) {
-          sessions[sessionId] = { messages: [] };
-        }
-
-        sessions[sessionId].messages.push({
-          from: "admin",
-          text: replyText
-        });
-      }
+    if (!message || !message.text) {
+      return res.sendStatus(200);
     }
+
+    // only accept your admin chat replies
+    if (String(message.chat.id) !== String(ADMIN_CHAT_ID)) {
+      return res.sendStatus(200);
+    }
+
+    // must be reply to bot message
+    if (!message.reply_to_message) {
+      return res.sendStatus(200);
+    }
+
+    const repliedTelegramMessageId = message.reply_to_message.message_id;
+    const sessionId = telegramToSessionMap[repliedTelegramMessageId];
+
+    if (!sessionId) {
+      return res.sendStatus(200);
+    }
+
+    if (!sessions[sessionId]) {
+      return res.sendStatus(200);
+    }
+
+    sessions[sessionId].messages.push({
+      from: "admin",
+      text: message.text
+    });
 
     res.sendStatus(200);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ ok: false });
   }
 });
