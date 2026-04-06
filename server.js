@@ -154,6 +154,37 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 // 🔵 End Google Auth
 
+// æ Start Google Auth 
+app.get("/api/google/accounts", async (req, res) => {
+  try {
+    const { token } = await oauth2Client.getAccessToken();
+
+    const response = await fetch(
+      "https://mybusinessaccountmanagement.googleapis.com/v1/accounts",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    );
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error("Accounts fetch error:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// æ End Google Auth
+
+
+
+
+
+
+
+
 // send customer message
 app.post("/chat/send", async (req, res) => {
   try {
