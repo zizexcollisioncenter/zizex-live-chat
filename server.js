@@ -16,6 +16,10 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
+oauth2Client.setCredentials({
+  refresh_token: process.env.GOOGLE_REFRESH_TOKEN
+});
+
 function getGoogleAuthUrl() {
   return oauth2Client.generateAuthUrl({
     access_type: "offline",
