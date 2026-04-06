@@ -3,7 +3,30 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 
+const { google } = require("googleapis");
+
 const app = express();
+
+
+
+
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+function getGoogleAuthUrl() {
+  return oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: [
+      "https://www.googleapis.com/auth/business.manage"
+    ]
+  });
+}
+
+
 
 app.use(cors());
 app.use(express.json());
@@ -97,6 +120,35 @@ app.post("/chat/start", (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+// 🔵 Start Google Auth
+app.get("/auth/google", (req, res) => {
+  const url = getGoogleAuthUrl();
+  res.redirect(url);
+});
+
+app.get("/auth/google/callback", async (req, res) => {
+  try {
+    const code = req.query.code;
+
+    if (!code) {
+      return res.status(400).send("Missing code");
+    }
+
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    console.log("=== GOOGLE TOKENS ===");
+    console.log("REFRESH TOKEN:", tokens.refresh_token);
+    console.log("ACCESS TOKEN:", tokens.access_token);
+
+    res.send("Google connected. Check server logs.");
+  } catch (err) {
+    console.error("Google OAuth error:", err);
+    res.status(500).send("OAuth failed");
+  }
+});
+// 🔵 End Google Auth
 
 // send customer message
 app.post("/chat/send", async (req, res) => {
